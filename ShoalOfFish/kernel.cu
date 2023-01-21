@@ -9,9 +9,11 @@
 #include <cuda_gl_interop.h>
 #include <stdio.h>
 #include <cmath>
+#include <string>
+#include <iostream>
 #define width 1280   //screen width
 #define height 700   //screen height
-#define fishNumber 1000
+#define fishNumber 2000
 #define maxThreds 1024
 #define maxBlocks 100
 #define M_PI 3.14159265358979323846
@@ -27,8 +29,8 @@ struct Shoal {
     float* position_y;
     float* velocity_x;
     float* velocity_y;
-    int h = 20;
-    int w = 5;
+    int h = 12;
+    int w = 3;
     int minDistance = 20;
     int viewRange = 100;
 };
@@ -46,9 +48,43 @@ Shoal shoal;
 float background;
 float fishColor;
 
-__device__ int sign(Point p1, Point p2, Point p3)
+static unsigned int CompileShader(unsigned int type, const std::string &source)
 {
-    return (p1.x - p3.x) * (p2.y - p3.y) - (p2.x - p3.x) * (p1.y - p3.y);
+    unsigned int id = glCreateShader(type);
+    const char* src = source.c_str();
+    glShaderSource(id, 1, &src, nullptr);
+    glCompileShader(id);
+
+    int result;
+    glGetShaderiv(id, GL_COMPILE_STATUS, &result);
+    if (result == GL_FALSE)
+    {
+        int length;
+        glGetShaderiv(id, GL_INFO_LOG_LENGTH, &length);
+        char* message = (char*)alloca(length * sizeof(char));
+        glGetShaderInfoLog(id, length, &length, message);
+        std::cout << "Failed to compile shader!" << std::endl;
+        std::cout << message << std::endl;
+        glDeleteShader(id);
+        return 0;
+    }
+
+    return id;
+    
+}
+
+static unsigned int CreateShader(const std::string& vertexShader, const std::string& fragmentShader)
+{
+    unsigned int program = glCreateProgram();
+    unsigned int vs = CompileShader(GL_VERTEX_SHADER, vertexShader);
+    unsigned int fs = CompileShader(GL_FRAGMENT_SHADER, fragmentShader);
+    glAttachShader(program, vs);
+    glAttachShader(program, fs);
+    glLinkProgram(program);
+    glValidateProgram(program);
+    glDeleteShader(vs);
+    glDeleteShader(fs);
+    return program;
 }
 
 __device__ Point MakePoint(float x, float y)
@@ -109,77 +145,81 @@ __global__ void CalculateShoal(Shoal shoal, float* output)
 
     float viewRange = shoal.viewRange * shoal.viewRange;
     float minDistance = shoal.minDistance * shoal.minDistance;
-    
-    
-        Point bois = MakePoint(shoal.position_x[fishId], shoal.position_y[fishId]);
-        Point centerOfMass = MakePoint(0,0);
-        Point separation = MakePoint(0, 0);
-        Point avrVelocity = MakePoint(0, 0);
-        int neighboursCountCenterOfMass = 0;
-        int neighboursCountVelocity = 0;
-        for (int neighbourFishId = 0; neighbourFishId < fishNumber; neighbourFishId++)
+
+
+    Point bois = MakePoint(shoal.position_x[fishId], shoal.position_y[fishId]);
+    Point centerOfMass = MakePoint(0, 0);
+    Point separation = MakePoint(0, 0);
+    Point avrVelocity = MakePoint(0, 0);
+    int neighboursCountCenterOfMass = 0;
+    int neighboursCountVelocity = 0;
+    for (int neighbourFishId = 0; neighbourFishId < fishNumber; neighbourFishId++)
+    {
+        if (neighbourFishId == fishId)
+            continue;
+
+        Point boisFriend = MakePoint(shoal.position_x[neighbourFishId], shoal.position_y[neighbourFishId]);
+        double distance = Distance(bois, boisFriend);
+
+        
+        if (viewRange > distance)
         {
-            if (neighbourFishId == fishId)
-                continue;
+            neighboursCountCenterOfMass++;
+            centerOfMass.x += boisFriend.x;
+            centerOfMass.y += boisFriend.y;
 
-            Point boisFriend = MakePoint(shoal.position_x[neighbourFishId], shoal.position_y[neighbourFishId]);
-            double distance = Distance(bois, boisFriend);
-            if (viewRange > distance)
-            {
-                neighboursCountCenterOfMass++;
-                centerOfMass.x += boisFriend.x;
-                centerOfMass.y += boisFriend.y;
-
-            }
-
-            if (viewRange > distance)
-            {
-                neighboursCountVelocity++;
-                avrVelocity.x += shoal.velocity_x[neighbourFishId];
-                avrVelocity.y += shoal.velocity_x[neighbourFishId];
-            }
-            if (minDistance > distance)
-            {
-                separation.x -= boisFriend.x - bois.x;
-                separation.y -= boisFriend.y - bois.y;
-            }
         }
-        Point newPosition = MakePoint(shoal.velocity_x[fishId], shoal.velocity_y[fishId]);
-        if (neighboursCountCenterOfMass > 0)
+
+        if (viewRange > distance)
         {
-            centerOfMass.x /= neighboursCountCenterOfMass;
-            centerOfMass.y /= neighboursCountCenterOfMass;
-
-             newPosition.x += (centerOfMass.x - bois.x) * CohesionScale;
-             newPosition.y += (centerOfMass.y - bois.y) * CohesionScale;
+            neighboursCountVelocity++;
+            avrVelocity.x += shoal.velocity_x[neighbourFishId];
+            avrVelocity.y += shoal.velocity_x[neighbourFishId];
         }
 
-        separation.x *= SeparationScale;
-        separation.y *= SeparationScale;
-
-        newPosition.x += separation.x;
-        newPosition.y += separation.y;
-
-        if (neighboursCountVelocity != 0) {
-            avrVelocity.x /= neighboursCountVelocity;
-            avrVelocity.y /= neighboursCountVelocity;
-            newPosition.x += avrVelocity.x * AlignmentScale;
-            newPosition.y += avrVelocity.y * AlignmentScale;
-        }
-
-        if (Distance(MakePoint(0, 0), newPosition) > MaxSpeed * MaxSpeed)
+        if (minDistance > distance)
         {
-            double calculateSpeed = sqrt( Distance(MakePoint(0, 0), newPosition));
-            newPosition.x *= MaxSpeed / calculateSpeed;
-            newPosition.y *= MaxSpeed / calculateSpeed;
+            separation.x -= boisFriend.x - bois.x;
+            separation.y -= boisFriend.y - bois.y;
         }
+    }
+    Point newVelocity = MakePoint(shoal.velocity_x[fishId], shoal.velocity_y[fishId]);
+    if (neighboursCountCenterOfMass > 0)
+    {
+        centerOfMass.x /= neighboursCountCenterOfMass;
+        centerOfMass.y /= neighboursCountCenterOfMass;
+
+        newVelocity.x += (centerOfMass.x - bois.x) * CohesionScale;
+        newVelocity.y += (centerOfMass.y - bois.y) * CohesionScale;
+    }
     
+    separation.x *= SeparationScale;
+    separation.y *= SeparationScale;
 
-    shoal.position_x[fishId] += newPosition.x;
-    shoal.position_y[fishId] += newPosition.y;
-    shoal.velocity_x[fishId] = newPosition.x;
-    shoal.velocity_y[fishId] = newPosition.y;
+    newVelocity.x += separation.x;
+    newVelocity.y += separation.y;
 
+    if (neighboursCountVelocity != 0) {
+        avrVelocity.x /= neighboursCountVelocity;
+        avrVelocity.y /= neighboursCountVelocity;
+        newVelocity.x += avrVelocity.x * AlignmentScale;
+        newVelocity.y += avrVelocity.y * AlignmentScale;
+    }
+
+    if (Distance(MakePoint(0, 0), newVelocity) > MaxSpeed * MaxSpeed)
+    {
+        double calculateSpeed = sqrt(Distance(MakePoint(0, 0), newVelocity));
+        newVelocity.x *= MaxSpeed / calculateSpeed;
+        newVelocity.y *= MaxSpeed / calculateSpeed;
+    }
+
+    // zapisz nowe ustawienie rybki
+    shoal.position_x[fishId] += newVelocity.x;
+    shoal.position_y[fishId] += newVelocity.y;
+    shoal.velocity_x[fishId] = newVelocity.x;
+    shoal.velocity_y[fishId] = newVelocity.y;
+
+    // wyświetlanie rybek na drugim końcu ekranu
     if (shoal.position_x[fishId] < 0)
         shoal.position_x[fishId] = width;
     else if (shoal.position_x[fishId] > width)
@@ -190,8 +230,9 @@ __global__ void CalculateShoal(Shoal shoal, float* output)
     else if (shoal.position_y[fishId] > height)
         shoal.position_y[fishId] = 0;
 
+    // zapisuje kordynaty rybki
     Point p1, p2, p3;
-    FishToCordinates(bois, Direction(newPosition), shoal.h, shoal.w, &p1, &p2, &p3);
+    FishToCordinates(bois, Direction(newVelocity), shoal.h, shoal.w, &p1, &p2, &p3);
     int start = fishId * 6;
     output[start] = p1.x;
     output[start + 1] = p1.y;
@@ -265,12 +306,6 @@ void display() {
 
     cudaGLUnmapBufferObject(buffer);
     glBindBuffer(GL_ARRAY_BUFFER, buffer);
-    /*glVertexPointer(2, GL_FLOAT, 12, 0);
-    glColorPointer(4, GL_UNSIGNED_BYTE, 12, (GLvoid*)8);
-    glEnableClientState(GL_VERTEX_ARRAY);
-    glEnableClientState(GL_COLOR_ARRAY);
-    glDrawArrays(GL_POINTS, 0, width * height);
-    glDisableClientState(GL_VERTEX_ARRAY);*/
     glDrawArrays(GL_TRIANGLES, 0, 3*fishNumber);
     glutSwapBuffers();
     
@@ -310,6 +345,27 @@ void Init()
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(float) * 2, 0);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
+    std::string vertexShader =
+        "#version 330 core\n"
+        "layout(location = e) in vec4 position; \n"
+        "\n"
+        "void main()\n"
+        "{\n"
+        "gl_Position = position; \n"
+        "}\n";
+    std::string fragmentShader =
+        "#version 330 core\n"
+        "\n"
+        "layout(location = 0) out vec4 color; \n"
+        "\n"
+        "void main()\n"
+        "{\n"
+        " color = vec4(0.1, 1.0, 0.1, 1.0); \n"
+        "}\n";
+
+    unsigned int shader = CreateShader(vertexShader, fragmentShader);
+    glUseProgram(shader);
+
     InitCuda();
     cudaGLRegisterBufferObject(buffer);   //register the buffer object for access by CUDA
 }
