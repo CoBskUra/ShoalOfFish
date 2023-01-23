@@ -12,7 +12,7 @@
 #include <thrust/execution_policy.h>
 #define width 1280   //screen width
 #define height 700   //screen height
-#define fishNumber 100
+#define fishNumber 2000
 #define maxThreds 1024
 #define maxBlocks 100
 #define M_PI 3.14159265358979323846
@@ -37,10 +37,11 @@ struct Grid {
     int* cellsId;
     int* firstFishInCell;
     int* lastFishInCell;
+    int* gridMapper;
     int gridNumber_Vertical;
     int gridNumber_Horyzontal;
-    int gridWidth;
-    int gridHeight;
+    int gridWidth = 100;
+    int gridHeight = 100;
 };
 
 struct Point {
@@ -53,6 +54,7 @@ float t = 0.0f;
 float* device;   //pointer to memory on the device (GPU VRAM)
 GLuint buffer;   //buffer
 Shoal shoal;
+Shoal scatterShoal;
 Grid grid;
 float background;
 float fishColor;
@@ -164,11 +166,53 @@ __global__ void CategorizeFishToCells(Shoal shoal, Grid grid)
     Point fish = MakePoint(shoal.position_x[fishId], shoal.position_y[fishId]);
 
     grid.cellsId[fishId] = FishsCellId(fish, grid.gridWidth, grid.gridHeight, grid.gridNumber_Horyzontal);
+
+    //printf("\nfish %d, cell %d", fishId, grid.cellsId[fishId]);
+}
+
+
+__global__ void PrintfShoalGrid(Shoal shoal, Grid grid)
+{
+    unsigned int fishId = blockIdx.x * blockDim.x + threadIdx.x;
+    if (fishId > 0)
+        return;
+    printf("\nfishId");
+    for (int i = 0; i < fishNumber; i++)
+    {
+        printf(",%d", i);
+    }
+
+    printf("\n position ");
+
+    for (int i = 0; i < fishNumber; i++)
+    {
+        printf(",( %f %f) ", shoal.position_x[i], shoal.position_y[i]);
+    }
+
+    printf("\nvel");
+    for (int i = 0; i < fishNumber; i++)
+    {
+        printf(",( %f %f) ", shoal.velocity_x[i], shoal.velocity_y[i]);
+    }
+    
+    printf("\ngrid");
+    for (int i = 0; i < fishNumber; i++)
+    {
+        printf(",%d ", grid.cellsId[i]);
+    }
+
+    printf("\nmaper");
+    for (int i = 0; i < fishNumber; i++)
+    {
+        printf(",%d ", grid.gridMapper[i]);
+    }
+    //printf("\nfish %d, cell %d", fishId, grid.cellsId[fishId]);
 }
 
 
 __global__ void CalculateShoal(Shoal shoal, Grid grid, float* output)
 {
+    //printf("CalculateShoal");
     unsigned int fishId = blockIdx.x * blockDim.x + threadIdx.x;
     if (fishId >= fishNumber)
         return;
@@ -205,13 +249,14 @@ __global__ void CalculateShoal(Shoal shoal, Grid grid, float* output)
             if (y < 0) { continue; }
             //int cellId = FishsCellId(MakePoint(x, y), grid.gridWidth, grid.gridHeight, grid.gridNumber_Horyzontal);
             int cellId = y * grid.gridWidth + leftDownCornerCell + x;
-
-            if (cellId > grid.gridWidth * grid.gridHeight)
+             
+            if (cellId > grid.gridNumber_Horyzontal * grid.gridNumber_Vertical - 1)
             {
                 continue;
             }
             int start = grid.firstFishInCell[cellId];
             int end = grid.lastFishInCell[cellId];
+            //printf("\nfish %d cell %d, start %d, end %d ", fishId, cellId, start, end);
             if (start == -1)
                 continue;
 
@@ -279,6 +324,8 @@ __global__ void CalculateShoal(Shoal shoal, Grid grid, float* output)
         newVelocity.y *= MaxSpeed / calculateSpeed;
     }
 
+    //printf("\n prev location %f %f new %f %f", fish.x, fish.y, fish.x + newVelocity.x, fish.y + newVelocity.y);
+
     fish.x += newVelocity.x;
     fish.y += newVelocity.y;
 
@@ -336,10 +383,10 @@ __global__ void InitStartPosition(Shoal shoal, int fisheGrideWidth, int fishGrid
     shoal.position_y[x] = startPoimt_y + fishGridY * distance;
 }
 
-__global__ void ResetGridStartEnd(int* start, int* end)
+__global__ void ResetGridStartEnd(int* start, int* end, int size)
 {
     unsigned int x = blockIdx.x * blockDim.x + threadIdx.x;
-    if (x >= fishNumber)
+    if (x >= size)
         return;
     start[x] = -1;
     end[x] = -1;
@@ -347,6 +394,7 @@ __global__ void ResetGridStartEnd(int* start, int* end)
 
 __global__ void CalculateStartEnd(int* start, int* end, int* gridId)
 {
+    //printf("CalculateStartEnd");
     unsigned int x = blockIdx.x * blockDim.x + threadIdx.x;
     if (x >= fishNumber)
         return;
@@ -358,8 +406,9 @@ __global__ void CalculateStartEnd(int* start, int* end, int* gridId)
 
     if (x == fishNumber - 1 || gridId[x + 1] != curentGridId)
         end[curentGridId] = x;
-}
 
+    //printf("\nfish %d cell %d, start %d, end %d ", x, curentGridId, start[curentGridId], end[curentGridId]);
+}
 
 
 
@@ -368,7 +417,7 @@ void time(int x)
     if (glutGetWindow())
     {
         glutPostRedisplay();
-        glutTimerFunc(100, time, 0);
+        glutTimerFunc(10, time, 0);
         t += 0.0166f;
     }
 }
@@ -389,6 +438,44 @@ void CalculateNeededThreads(int* threads, int* blocks, int neededThreads)
     }
 }
 
+__global__ void ResetMapper(int* mapper, int size)
+{
+    unsigned int x = blockIdx.x * blockDim.x + threadIdx.x;
+    if (x >= size)
+        return;
+
+    mapper[x] = x;
+
+}
+
+__global__ void MappShoal(Shoal shoal, Shoal tmpShoal, Grid grid, int size)
+{
+    unsigned int x = blockIdx.x * blockDim.x + threadIdx.x;
+    if (x >= size)
+        return;
+
+    int mapFrom = grid.gridMapper[x];
+    tmpShoal.velocity_x[x] = shoal.velocity_x[mapFrom];
+    tmpShoal.velocity_y[x] = shoal.velocity_y[mapFrom];
+    tmpShoal.position_x[x] = shoal.position_x[mapFrom];
+    tmpShoal.position_y[x] = shoal.position_y[mapFrom];
+
+}
+
+__global__ void CopyShoal(Shoal shoal, Shoal tmpShoal, int size)
+{
+    unsigned int x = blockIdx.x * blockDim.x + threadIdx.x;
+    if (x >= size)
+        return;
+
+    shoal.velocity_x[x] = tmpShoal.velocity_x[x];
+    shoal.velocity_y[x] = tmpShoal.velocity_y[x];
+    shoal.position_x[x] = tmpShoal.position_x[x];
+    shoal.position_y[x] = tmpShoal.position_y[x];
+
+}
+
+
 void LunchCuda()
 {
     int blocks, threads;
@@ -396,15 +483,36 @@ void LunchCuda()
     CategorizeFishToCells << <blocks, threads >> > (shoal, grid);
     cudaDeviceSynchronize();
 
-    thrust::sort_by_key(thrust::device, grid.cellsId, grid.cellsId + fishNumber, shoal.position_x);
+    CalculateNeededThreads(&threads, &blocks, grid.gridNumber_Horyzontal * grid.gridNumber_Vertical);
+    ResetGridStartEnd << <blocks, threads >> > (grid.firstFishInCell, grid.lastFishInCell, grid.gridWidth * grid.gridHeight - 1);
+    CalculateNeededThreads(&threads, &blocks, fishNumber);
+    ResetMapper << <blocks, threads >> > (grid.gridMapper, fishNumber);
+    cudaDeviceSynchronize();
+    
+    /*PrintfShoalGrid << <blocks, threads >> > (shoal, grid);
+    cudaDeviceSynchronize();*/
+
+    thrust::sort_by_key(thrust::device, grid.cellsId, grid.cellsId + fishNumber, grid.gridMapper);
+
+    CalculateNeededThreads(&threads, &blocks, fishNumber);
+    MappShoal << <blocks, threads >> > (shoal, scatterShoal, grid, fishNumber);
+    cudaDeviceSynchronize();
+    CopyShoal << <blocks, threads >> > (shoal, scatterShoal, fishNumber);
+    cudaDeviceSynchronize();
+
+    /*std::swap(shoal.position_x, scatterShoal.position_x);
+    std::swap(shoal.position_y, scatterShoal.position_y);
+    std::swap(shoal.velocity_x, scatterShoal.velocity_x);
+    std::swap(shoal.velocity_y, scatterShoal.velocity_y);*/
+    /*thrust::sort_by_key(thrust::device, grid.cellsId, grid.cellsId + fishNumber, shoal.position_x);
     thrust::sort_by_key(thrust::device, grid.cellsId, grid.cellsId + fishNumber , shoal.position_y);
     thrust::sort_by_key(thrust::device, grid.cellsId, grid.cellsId + fishNumber, shoal.velocity_x);
-    thrust::sort_by_key(thrust::device, grid.cellsId, grid.cellsId + fishNumber, shoal.velocity_y);
-    thrust::sort(thrust::device, grid.cellsId, grid.cellsId + fishNumber);
+    thrust::sort_by_key(thrust::device, grid.cellsId, grid.cellsId + fishNumber, shoal.velocity_y);*/
+    
 
-    CalculateNeededThreads(&threads, &blocks, grid.gridWidth * grid.gridHeight);
-    ResetGridStartEnd<< <blocks, threads >> > (grid.firstFishInCell, grid.lastFishInCell);
-    cudaDeviceSynchronize();
+    //PrintfShoalGrid << <blocks, threads >> > (shoal, grid);
+    //cudaDeviceSynchronize();
+
 
     CalculateNeededThreads(&threads, &blocks, fishNumber);
     CalculateStartEnd << <blocks, threads >> > (grid.firstFishInCell, grid.lastFishInCell, grid.cellsId);
@@ -431,25 +539,32 @@ void display() {
 
 void InitCuda()
 {
-    grid.gridHeight = (shoal.viewRange + 1)/ 2;
-    grid.gridWidth = grid.gridHeight;
     cudaMalloc(&device, fishNumber * 6 * sizeof(float));   //allocate memory on the GPU VRAM
     cudaMalloc(&shoal.position_x, fishNumber * sizeof(float));
     cudaMalloc(&shoal.position_y, fishNumber * sizeof(float));
     cudaMalloc(&shoal.velocity_x, fishNumber * sizeof(float));
     cudaMalloc(&shoal.velocity_y, fishNumber * sizeof(float));
+
+    cudaMalloc(&scatterShoal.position_x, fishNumber * sizeof(float));
+    cudaMalloc(&scatterShoal.position_y, fishNumber * sizeof(float));
+    cudaMalloc(&scatterShoal.velocity_x, fishNumber * sizeof(float));
+    cudaMalloc(&scatterShoal.velocity_y, fishNumber * sizeof(float));
+
     cudaMalloc(&grid.cellsId, fishNumber * sizeof(int));
+    cudaMalloc(&grid.gridMapper, fishNumber * sizeof(int));
     cudaMalloc(&grid.firstFishInCell, grid.gridHeight * grid.gridWidth * sizeof(int));
     cudaMalloc(&grid.lastFishInCell, grid.gridHeight * grid.gridWidth * sizeof(int));
     grid.gridNumber_Horyzontal = (int)ceil((double)width / (double)grid.gridWidth);
     grid.gridNumber_Vertical = (int)ceil((double)height / (double)grid.gridHeight);
     
 
-    int blocks, threads;
-    CalculateNeededThreads(&threads, &blocks, fishNumber);
     int rantagleOfFishWidth = (int)ceil(sqrt((fishNumber * width) / height));
     int rantagleOfFishHeight = (int)ceil(rantagleOfFishWidth * height / width);
+
+    int blocks, threads;
+    CalculateNeededThreads(&threads, &blocks, fishNumber);
     InitStartPosition << <blocks, threads >> > (shoal, rantagleOfFishWidth, rantagleOfFishHeight);
+    cudaDeviceSynchronize();
 }
 
 void Init()
@@ -499,10 +614,17 @@ void FreeShoalOfFish()
     cudaFree(grid.lastFishInCell);
     cudaFree(grid.firstFishInCell);
     cudaFree(grid.cellsId);
+    cudaFree(grid.gridMapper);
+
     cudaFree(shoal.velocity_x);
     cudaFree(shoal.velocity_y);
     cudaFree(shoal.velocity_x);
     cudaFree(shoal.velocity_y);
+
+    cudaFree(scatterShoal.velocity_x);
+    cudaFree(scatterShoal.velocity_y);
+    cudaFree(scatterShoal.velocity_x);
+    cudaFree(scatterShoal.velocity_y);
 }
 
 int main(int argc, char** argv) {
