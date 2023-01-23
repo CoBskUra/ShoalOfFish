@@ -12,11 +12,11 @@
 #include <thrust/execution_policy.h>
 #define width 1280   //screen width
 #define height 700   //screen height
-#define fishNumber 2000
+#define fishNumber 8000
 #define maxThreds 1024
 #define maxBlocks 100
 #define M_PI 3.14159265358979323846
-#define MaxSpeed 3
+#define MaxSpeed 10
 constexpr float CohesionScale = 0.01f;
 constexpr float AlignmentScale = 0.1f;
 constexpr float SeparationScale = 0.1f;
@@ -206,6 +206,12 @@ __global__ void PrintfShoalGrid(Shoal shoal, Grid grid)
     {
         printf(",%d ", grid.gridMapper[i]);
     }
+
+    printf("\nStartEnd");
+    for (int i = 0; i < grid.gridNumber_Horyzontal*grid.gridNumber_Vertical; i++)
+    {
+        printf("cellId: %d (%d - %d ) ", i, grid.firstFishInCell[i], grid.lastFishInCell[i]);
+    }
     //printf("\nfish %d, cell %d", fishId, grid.cellsId[fishId]);
 }
 
@@ -237,10 +243,11 @@ __global__ void CalculateShoal(Shoal shoal, Grid grid, float* output)
         grid.gridWidth, grid.gridHeight, grid.gridNumber_Horyzontal);
 
     int horyzontalCells = rightDownCornerCell - leftDownCornerCell;
-    int verticalCells = leftUpCornerCell - leftDownCornerCell;
+    int verticalCells = (leftUpCornerCell - leftDownCornerCell)/grid.gridNumber_Horyzontal ;
 
-
-
+    /*leftDownCornerCell = 0;
+    horyzontalCells = grid.gridWidth;
+    verticalCells = grid.gridHeight;*/
     for (int x = 0; x <= horyzontalCells; x++)
     {
         if (x < 0) { continue; }
@@ -248,8 +255,9 @@ __global__ void CalculateShoal(Shoal shoal, Grid grid, float* output)
         {
             if (y < 0) { continue; }
             //int cellId = FishsCellId(MakePoint(x, y), grid.gridWidth, grid.gridHeight, grid.gridNumber_Horyzontal);
-            int cellId = y * grid.gridWidth + leftDownCornerCell + x;
-             
+            int cellId = y * grid.gridNumber_Horyzontal + leftDownCornerCell + x;
+            /*if (fishId == 0)
+                printf("\n %d, %d %d", x, y, cellId);*/
             if (cellId > grid.gridNumber_Horyzontal * grid.gridNumber_Vertical - 1)
             {
                 continue;
@@ -445,7 +453,6 @@ __global__ void ResetMapper(int* mapper, int size)
         return;
 
     mapper[x] = x;
-
 }
 
 __global__ void MappShoal(Shoal shoal, Shoal tmpShoal, Grid grid, int size)
@@ -475,6 +482,13 @@ __global__ void CopyShoal(Shoal shoal, Shoal tmpShoal, int size)
 
 }
 
+void swapShoalsPointers(Shoal shoal, Shoal tmpShoal)
+{
+    std::swap(shoal.velocity_x, tmpShoal.velocity_x);
+    std::swap(shoal.velocity_y, tmpShoal.velocity_y);
+    std::swap(shoal.position_x, tmpShoal.position_x);
+    std::swap(shoal.position_y, tmpShoal.position_y);
+}
 
 void LunchCuda()
 {
@@ -488,8 +502,8 @@ void LunchCuda()
     CalculateNeededThreads(&threads, &blocks, fishNumber);
     ResetMapper << <blocks, threads >> > (grid.gridMapper, fishNumber);
     cudaDeviceSynchronize();
-    
-    /*PrintfShoalGrid << <blocks, threads >> > (shoal, grid);
+    /*
+    PrintfShoalGrid << <blocks, threads >> > (shoal, grid);
     cudaDeviceSynchronize();*/
 
     thrust::sort_by_key(thrust::device, grid.cellsId, grid.cellsId + fishNumber, grid.gridMapper);
@@ -497,6 +511,7 @@ void LunchCuda()
     CalculateNeededThreads(&threads, &blocks, fishNumber);
     MappShoal << <blocks, threads >> > (shoal, scatterShoal, grid, fishNumber);
     cudaDeviceSynchronize();
+    //swapShoalsPointers(shoal, scatterShoal);
     CopyShoal << <blocks, threads >> > (shoal, scatterShoal, fishNumber);
     cudaDeviceSynchronize();
 
@@ -510,13 +525,15 @@ void LunchCuda()
     thrust::sort_by_key(thrust::device, grid.cellsId, grid.cellsId + fishNumber, shoal.velocity_y);*/
     
 
-    //PrintfShoalGrid << <blocks, threads >> > (shoal, grid);
-    //cudaDeviceSynchronize();
+    
 
 
     CalculateNeededThreads(&threads, &blocks, fishNumber);
     CalculateStartEnd << <blocks, threads >> > (grid.firstFishInCell, grid.lastFishInCell, grid.cellsId);
     cudaDeviceSynchronize();
+
+    //PrintfShoalGrid << <blocks, threads >> > (shoal, grid);
+    //cudaDeviceSynchronize();
 
     CalculateNeededThreads(&threads, &blocks, fishNumber);
     CalculateShoal << <blocks, threads >> > (shoal, grid, device);
