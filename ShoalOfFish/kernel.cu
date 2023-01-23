@@ -11,14 +11,15 @@
 #include <cmath>
 #include <string>
 #include <iostream>
+#include <thrust/sort.h>
+#include <thrust/execution_policy.h>
 #define width 1280   //screen width
 #define height 700   //screen height
-#define fishNumber 2000
+#define fishNumber 10
 #define maxThreds 1024
 #define maxBlocks 100
 #define M_PI 3.14159265358979323846
 #define MaxSpeed 10
-
 constexpr float CohesionScale = 0.01f;
 constexpr float AlignmentScale = 0.1f;
 constexpr float SeparationScale = 0.1f;
@@ -29,10 +30,20 @@ struct Shoal {
     float* position_y;
     float* velocity_x;
     float* velocity_y;
-    int h = 12;
-    int w = 3;
+    int h = 30;
+    int w = 5;
     int minDistance = 20;
     int viewRange = 100;
+};
+
+struct Grid {
+    int* cellsId;
+    int* firstFishInCell;
+    int* lastFishInCell;
+    int gridNumber_Vertical;
+    int gridNumber_Horyzontal;
+    int gridWidth;
+    int gridHeight;
 };
 
 struct Point {
@@ -40,11 +51,13 @@ struct Point {
     double y;
 };
 
+
 int x = 0;
 float t = 0.0f;
 float* device;   //pointer to memory on the device (GPU VRAM)
 GLuint buffer;   //buffer
 Shoal shoal;
+Grid grid;
 float background;
 float fishColor;
 
@@ -137,50 +150,76 @@ __device__ void FishToCordinates(Point fishPosition, float direction, int h, int
     p3->x = fishPosition.x - hX - fishWingX;
     p3->y = fishPosition.y - hY - fishWingY;
 }
-__global__ void CalculateShoal(Shoal shoal, float* output)
+
+
+__device__ int FishsCellId(Point fish, int gridWidth, int gridHeight, int gridNumber_Horyzontal)
+{
+    int gridX = fish.x / gridWidth;
+    int gridY = fish.y / gridHeight;
+    return gridY * gridNumber_Horyzontal + gridX;
+}
+
+
+
+__global__ void CalculateShoal(Shoal shoal, Grid grid, float* output)
 {
     unsigned int fishId = blockIdx.x * blockDim.x + threadIdx.x;
-    if (fishId > fishNumber)
+    if (fishId >= fishNumber)
         return;
 
     float viewRange = shoal.viewRange * shoal.viewRange;
     float minDistance = shoal.minDistance * shoal.minDistance;
 
 
-    Point bois = MakePoint(shoal.position_x[fishId], shoal.position_y[fishId]);
+    Point fish = MakePoint(shoal.position_x[fishId], shoal.position_y[fishId]);
     Point centerOfMass = MakePoint(0, 0);
     Point separation = MakePoint(0, 0);
     Point avrVelocity = MakePoint(0, 0);
     int neighboursCountCenterOfMass = 0;
     int neighboursCountVelocity = 0;
-    for (int neighbourFishId = 0; neighbourFishId < fishNumber; neighbourFishId++)
+    
+    for (int x = fish.x - viewRange; x <= fish.x + viewRange; x += grid.gridWidth)
     {
-        if (neighbourFishId == fishId)
-            continue;
-
-        Point boisFriend = MakePoint(shoal.position_x[neighbourFishId], shoal.position_y[neighbourFishId]);
-        double distance = Distance(bois, boisFriend);
-
-        
-        if (viewRange > distance)
+        for (int y = fish.y - viewRange; y <= fish.y + viewRange; x += grid.gridHeight)
         {
-            neighboursCountCenterOfMass++;
-            centerOfMass.x += boisFriend.x;
-            centerOfMass.y += boisFriend.y;
+            int cellId = FishsCellId(MakePoint(x, y), grid.gridWidth, grid.gridHeight, grid.gridNumber_Horyzontal);
 
-        }
+            int start = grid.firstFishInCell[cellId];
+            int end = grid.lastFishInCell[cellId];
+            if (start == -1)
+                continue;
 
-        if (viewRange > distance)
-        {
-            neighboursCountVelocity++;
-            avrVelocity.x += shoal.velocity_x[neighbourFishId];
-            avrVelocity.y += shoal.velocity_x[neighbourFishId];
-        }
+            for (int neighbourFishId = start; neighbourFishId <= end; neighbourFishId++)
+            {
 
-        if (minDistance > distance)
-        {
-            separation.x -= boisFriend.x - bois.x;
-            separation.y -= boisFriend.y - bois.y;
+                if (neighbourFishId == fishId)
+                    continue;
+
+                Point fishsFriend = MakePoint(shoal.position_x[neighbourFishId], shoal.position_y[neighbourFishId]);
+                double distance = Distance(fish, fishsFriend);
+
+
+                if (viewRange > distance)
+                {
+                    neighboursCountCenterOfMass++;
+                    centerOfMass.x += fishsFriend.x;
+                    centerOfMass.y += fishsFriend.y;
+
+                }
+
+                if (viewRange > distance)
+                {
+                    neighboursCountVelocity++;
+                    avrVelocity.x += shoal.velocity_x[neighbourFishId];
+                    avrVelocity.y += shoal.velocity_x[neighbourFishId];
+                }
+
+                if (minDistance > distance)
+                {
+                    separation.x -= fishsFriend.x - fish.x;
+                    separation.y -= fishsFriend.y - fish.y;
+                }
+            }
         }
     }
     Point newVelocity = MakePoint(shoal.velocity_x[fishId], shoal.velocity_y[fishId]);
@@ -189,8 +228,8 @@ __global__ void CalculateShoal(Shoal shoal, float* output)
         centerOfMass.x /= neighboursCountCenterOfMass;
         centerOfMass.y /= neighboursCountCenterOfMass;
 
-        newVelocity.x += (centerOfMass.x - bois.x) * CohesionScale;
-        newVelocity.y += (centerOfMass.y - bois.y) * CohesionScale;
+        newVelocity.x += (centerOfMass.x - fish.x) * CohesionScale;
+        newVelocity.y += (centerOfMass.y - fish.y) * CohesionScale;
     }
     
     separation.x *= SeparationScale;
@@ -213,26 +252,35 @@ __global__ void CalculateShoal(Shoal shoal, float* output)
         newVelocity.y *= MaxSpeed / calculateSpeed;
     }
 
+    fish.x += newVelocity.x;
+    fish.y += newVelocity.y;
+
+
     // zapisz nowe ustawienie rybki
-    shoal.position_x[fishId] += newVelocity.x;
-    shoal.position_y[fishId] += newVelocity.y;
+    if (fish.x < 0)
+        shoal.position_x[fishId] = width;
+    else if (fish.x > width)
+        shoal.position_x[fishId] = 0;
+    else 
+        shoal.position_x[fishId] = fish.x;
+
+    if (fish.y < 0)
+        shoal.position_y[fishId] = height;
+    else if (fish.y > height)
+        shoal.position_y[fishId] = 0;
+    else
+        shoal.position_y[fishId] = fish.y;
+
     shoal.velocity_x[fishId] = newVelocity.x;
     shoal.velocity_y[fishId] = newVelocity.y;
 
-    // wyświetlanie rybek na drugim końcu ekranu
-    if (shoal.position_x[fishId] < 0)
-        shoal.position_x[fishId] = width;
-    else if (shoal.position_x[fishId] > width)
-        shoal.position_x[fishId] = 0;
-
-    if (shoal.position_y[fishId] < 0)
-        shoal.position_y[fishId] = height;
-    else if (shoal.position_y[fishId] > height)
-        shoal.position_y[fishId] = 0;
+    // zapisuje id gripu
+    
+    grid.cellsId[fishId] = FishsCellId(fish, grid.gridWidth, grid.gridHeight, grid.gridNumber_Horyzontal);
 
     // zapisuje kordynaty rybki
     Point p1, p2, p3;
-    FishToCordinates(bois, Direction(newVelocity), shoal.h, shoal.w, &p1, &p2, &p3);
+    FishToCordinates(fish, Direction(newVelocity), shoal.h, shoal.w, &p1, &p2, &p3);
     int start = fishId * 6;
     output[start] = p1.x;
     output[start + 1] = p1.y;
@@ -247,6 +295,10 @@ __global__ void CalculateShoal(Shoal shoal, float* output)
 __global__ void InitStartPosition(Shoal shoal, int fisheGrideWidth, int fishGrideHeight)
 {
     unsigned int x = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (x >= fishNumber)
+        return;
+
     int distance = shoal.minDistance;
     int startPoint_x = (width - distance*fisheGrideWidth) / 2;
     int startPoimt_y = (height - distance*fishGrideHeight) / 2;
@@ -258,7 +310,32 @@ __global__ void InitStartPosition(Shoal shoal, int fisheGrideWidth, int fishGrid
     shoal.position_y[x] = startPoimt_y + fishGridY * distance;
 }
 
-// Global variables to track the position of the dot
+__global__ void ResetGridStartEnd(int* start, int* end)
+{
+    unsigned int x = blockIdx.x * blockDim.x + threadIdx.x;
+    if (x >= fishNumber)
+        return;
+    start[x] = -1;
+    end[x] = -1;
+}
+
+__global__ void CalculateStartEnd(int* start, int* end, int* gridId)
+{
+    unsigned int x = blockIdx.x * blockDim.x + threadIdx.x;
+    if (x >= fishNumber)
+        return;
+
+    int curentGridId = gridId[x];
+
+    if (x == 0 || gridId[x - 1] != curentGridId)
+        start[curentGridId] = x;
+
+    if (x == fishNumber - 1 || gridId[x + 1] != curentGridId)
+        end[curentGridId] = x;
+
+}
+
+
 
 
 void time(int x)
@@ -266,7 +343,7 @@ void time(int x)
     if (glutGetWindow())
     {
         glutPostRedisplay();
-        glutTimerFunc(10, time, 0);
+        glutTimerFunc(17, time, 0);
         t += 0.0166f;
     }
 }
@@ -291,7 +368,17 @@ void LunchCuda()
 {
     int blocks, threads;
     CalculateNeededThreads(&threads, &blocks);
-    CalculateShoal << <blocks, threads >> > (shoal, device);
+    thrust::sort_by_key(thrust::device, grid.cellsId, grid.cellsId + fishNumber, shoal.position_x);
+    thrust::sort_by_key(thrust::device, grid.cellsId, grid.cellsId + fishNumber, shoal.position_y);
+    thrust::sort_by_key(thrust::device, grid.cellsId, grid.cellsId + fishNumber, shoal.velocity_x);
+    thrust::sort_by_key(thrust::device, grid.cellsId, grid.cellsId + fishNumber, shoal.velocity_y);
+    thrust::sort(thrust::device, grid.cellsId, grid.cellsId + fishNumber);
+
+    ResetGridStartEnd<< <blocks, threads >> > (grid.firstFishInCell, grid.lastFishInCell);
+    cudaThreadSynchronize();
+    CalculateStartEnd << <blocks, threads >> > (grid.firstFishInCell, grid.lastFishInCell, grid.cellsId);
+    cudaThreadSynchronize();
+    CalculateShoal << <blocks, threads >> > (shoal, grid, device);
     cudaThreadSynchronize();
 
 }
@@ -316,11 +403,18 @@ void display() {
 
 void InitCuda()
 {
+    grid.gridHeight = (shoal.viewRange + 1)/ 2;
+    grid.gridWidth = grid.gridHeight;
     cudaMalloc(&device, fishNumber * 6 * sizeof(float));   //allocate memory on the GPU VRAM
     cudaMalloc(&shoal.position_x, fishNumber * sizeof(float));
     cudaMalloc(&shoal.position_y, fishNumber * sizeof(float));
     cudaMalloc(&shoal.velocity_x, fishNumber * sizeof(float));
     cudaMalloc(&shoal.velocity_y, fishNumber * sizeof(float));
+    cudaMalloc(&grid.cellsId, fishNumber * sizeof(int));
+    cudaMalloc(&grid.firstFishInCell, fishNumber * sizeof(int));
+    cudaMalloc(&grid.lastFishInCell, fishNumber * sizeof(int));
+    grid.gridNumber_Horyzontal = ceil((double)width / (double)grid.gridWidth);
+    grid.gridNumber_Vertical = ceil((double)height / (double)grid.gridHeight);
     int fisheGrideWidth = ceil(sqrt((fishNumber * width) / height));
     int fishGrideHeight = ceil(fisheGrideWidth * height / width);
 
@@ -370,15 +464,27 @@ void Init()
     cudaGLRegisterBufferObject(buffer);   //register the buffer object for access by CUDA
 }
 
+void FreeShoalOfFish()
+{
+    cudaFree(device);
+    cudaFree(grid.lastFishInCell);
+    cudaFree(grid.firstFishInCell);
+    cudaFree(grid.cellsId);
+    cudaFree(shoal.velocity_x);
+    cudaFree(shoal.velocity_y);
+    cudaFree(shoal.velocity_x);
+    cudaFree(shoal.velocity_y);
+}
+
 int main(int argc, char** argv) {
     // Initialize GLUT
     glutInit(&argc, argv);
     glutInitDisplayMode(GLUT_SINGLE | GLUT_RGB);   //display mode
     glutInitWindowSize(width, height);
-    glutCreateWindow("Moving Dot"); // Create the window
+    glutCreateWindow("ShoalOfFish"); // Create the window
     Init();
     // Enter the main loop
     glutMainLoop();
-    cudaFree(device);
+    FreeShoalOfFish();
     return 0;
 }
