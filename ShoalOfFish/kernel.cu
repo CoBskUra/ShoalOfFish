@@ -12,7 +12,7 @@
 #include <thrust/execution_policy.h>
 #define width 1280   //screen width
 #define height 700   //screen height
-#define fishNumber 10000
+#define fishNumber 15000
 #define maxThreds 512
 #define maxBlocks 100
 #define M_PI 3.14159265358979323846
@@ -37,10 +37,10 @@ struct Shoal {
     float* position_y;
     float* velocity_x;
     float* velocity_y;
-    int h = 5;
-    int w = 1;
-    int minDistance = 15;
-    int viewRange = 50;
+    const int h = 5;
+    const int w = 1;
+    const int minDistance = 15;
+    const int viewRange = 50;
 };
 
 struct Grid {
@@ -50,8 +50,8 @@ struct Grid {
     int* gridMapper;
     int gridNumber_Vertical;
     int gridNumber_Horyzontal;
-    int gridWidth = 100;
-    int gridHeight = 100;
+    const int gridWidth = 100;
+    const int gridHeight = 100;
 };
 
 struct Point {
@@ -59,7 +59,14 @@ struct Point {
     double y;
 };
 
+struct Predator {
+    Point position;
+    const int size = 100;
+};
 
+
+
+Predator predator;
 float* device;   //pointer to memory on the device (GPU VRAM)
 GLuint buffer;   //buffer
 Shoal shoal;
@@ -105,7 +112,7 @@ static unsigned int CreateShader(const std::string& vertexShader, const std::str
     return program;
 }
 
-__device__ Point MakePoint(float x, float y)
+__device__ __host__ Point MakePoint(double x, double y)
 {
     Point p;
     p.x = x;
@@ -514,12 +521,19 @@ void time(int x)
     }
 }
 
+void MouseMove(int x, int y)
+{
+    predator.position = MakePoint(width * x / glutGet(GLUT_WINDOW_WIDTH),
+        height * y / glutGet(GLUT_WINDOW_HEIGHT));
+}
+
 void Init()
 {
     glClearColor(0.0, 0.0, 0.0, 0.0);
     glMatrixMode(GL_PROJECTION);
     gluOrtho2D(0.0, width, 0.0, height);
     glutDisplayFunc(display);
+    glutPassiveMotionFunc(MouseMove);
     time(0);
     glewInit();
     glGenBuffers(1, &buffer);
@@ -578,7 +592,7 @@ int main(int argc, char** argv) {
     glutInit(&argc, argv);
     glutInitDisplayMode(GLUT_SINGLE | GLUT_RGB);   //display mode
     glutInitWindowSize(width, height);
-    glutCreateWindow("ShoalOfFish"); // Create the window
+    glutCreateWindow("Shoal Of Fish"); // Create the window
     Init();
     // Enter the main loop
     glutMainLoop();
