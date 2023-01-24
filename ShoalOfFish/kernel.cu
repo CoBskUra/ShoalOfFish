@@ -12,7 +12,7 @@
 #include <thrust/execution_policy.h>
 #define width 1280   //screen width
 #define height 700   //screen height
-#define fishNumber 8000
+#define fishNumber 10000
 #define maxThreds 1024
 #define maxBlocks 100
 #define M_PI 3.14159265358979323846
@@ -29,8 +29,8 @@ struct Shoal {
     float* velocity_y;
     int h = 12;
     int w = 3;
-    int minDistance = 20;
-    int viewRange = 100;
+    int minDistance = 15;
+    int viewRange = 80;
 };
 
 struct Grid {
@@ -171,49 +171,49 @@ __global__ void CategorizeFishToCells(Shoal shoal, Grid grid)
 }
 
 
-__global__ void PrintfShoalGrid(Shoal shoal, Grid grid)
-{
-    unsigned int fishId = blockIdx.x * blockDim.x + threadIdx.x;
-    if (fishId > 0)
-        return;
-    printf("\nfishId");
-    for (int i = 0; i < fishNumber; i++)
-    {
-        printf(",%d", i);
-    }
-
-    printf("\n position ");
-
-    for (int i = 0; i < fishNumber; i++)
-    {
-        printf(",( %f %f) ", shoal.position_x[i], shoal.position_y[i]);
-    }
-
-    printf("\nvel");
-    for (int i = 0; i < fishNumber; i++)
-    {
-        printf(",( %f %f) ", shoal.velocity_x[i], shoal.velocity_y[i]);
-    }
-    
-    printf("\ngrid");
-    for (int i = 0; i < fishNumber; i++)
-    {
-        printf(",%d ", grid.cellsId[i]);
-    }
-
-    printf("\nmaper");
-    for (int i = 0; i < fishNumber; i++)
-    {
-        printf(",%d ", grid.gridMapper[i]);
-    }
-
-    printf("\nStartEnd");
-    for (int i = 0; i < grid.gridNumber_Horyzontal*grid.gridNumber_Vertical; i++)
-    {
-        printf("cellId: %d (%d - %d ) ", i, grid.firstFishInCell[i], grid.lastFishInCell[i]);
-    }
-    //printf("\nfish %d, cell %d", fishId, grid.cellsId[fishId]);
-}
+//__global__ void PrintfShoalGrid(Shoal shoal, Grid grid)
+//{
+//    unsigned int fishId = blockIdx.x * blockDim.x + threadIdx.x;
+//    if (fishId > 0)
+//        return;
+//    printf("\nfishId");
+//    for (int i = 0; i < fishNumber; i++)
+//    {
+//        printf(",%d", i);
+//    }
+//
+//    printf("\n position ");
+//
+//    for (int i = 0; i < fishNumber; i++)
+//    {
+//        printf(",( %f %f) ", shoal.position_x[i], shoal.position_y[i]);
+//    }
+//
+//    printf("\nvel");
+//    for (int i = 0; i < fishNumber; i++)
+//    {
+//        printf(",( %f %f) ", shoal.velocity_x[i], shoal.velocity_y[i]);
+//    }
+//    
+//    printf("\ngrid");
+//    for (int i = 0; i < fishNumber; i++)
+//    {
+//        printf(",%d ", grid.cellsId[i]);
+//    }
+//
+//    printf("\nmaper");
+//    for (int i = 0; i < fishNumber; i++)
+//    {
+//        printf(",%d ", grid.gridMapper[i]);
+//    }
+//
+//    printf("\nStartEnd");
+//    for (int i = 0; i < grid.gridNumber_Horyzontal*grid.gridNumber_Vertical; i++)
+//    {
+//        printf("cellId: %d (%d - %d ) ", i, grid.firstFishInCell[i], grid.lastFishInCell[i]);
+//    }
+//    //printf("\nfish %d, cell %d", fishId, grid.cellsId[fishId]);
+//}
 
 
 __global__ void CalculateShoal(Shoal shoal, Grid grid, float* output)
@@ -479,15 +479,21 @@ __global__ void CopyShoal(Shoal shoal, Shoal tmpShoal, int size)
     shoal.velocity_y[x] = tmpShoal.velocity_y[x];
     shoal.position_x[x] = tmpShoal.position_x[x];
     shoal.position_y[x] = tmpShoal.position_y[x];
-
 }
 
+void swap(float** a, float** b) {
+    float* temp =* a;
+    *a = *b;
+    *b = temp;
+}
+
+// czemu nie działa
 void swapShoalsPointers(Shoal shoal, Shoal tmpShoal)
 {
-    std::swap(shoal.velocity_x, tmpShoal.velocity_x);
-    std::swap(shoal.velocity_y, tmpShoal.velocity_y);
-    std::swap(shoal.position_x, tmpShoal.position_x);
-    std::swap(shoal.position_y, tmpShoal.position_y);
+    swap(&shoal.velocity_x, &tmpShoal.velocity_x);
+    swap(&shoal.velocity_y, &tmpShoal.velocity_y);
+    swap(&shoal.position_x, &tmpShoal.position_x);
+    swap(&shoal.position_y, &tmpShoal.position_y);
 }
 
 void LunchCuda()
