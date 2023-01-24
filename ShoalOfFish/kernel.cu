@@ -11,13 +11,13 @@
 #include <thrust/sort.h>
 #include <thrust/execution_policy.h>
 #include <fstream>
-#define width 1280   //screen width
-#define height 700   //screen height
+#define width 1200   //screen width
+#define height 750   //screen height
 #define fishNumber 10000
 #define maxThreds 512
 #define maxBlocks 100
 #define M_PI 3.14159265358979323846
-#define MaxSpeed 10
+#define MaxSpeed 5
 #define Timer 10
 #define gpuErrchk(ans) { gpuAssert((ans), __FILE__, __LINE__); }
 inline void gpuAssert(cudaError_t code, const char* file, int line, bool abort = true)
@@ -32,7 +32,6 @@ constexpr float CohesionScale = 0.01f;
 constexpr float AlignmentScale = 0.1f;
 constexpr float SeparationScale = 0.1f;
 
-
 struct Shoal {
     float* position_x;
     float* position_y;
@@ -40,8 +39,8 @@ struct Shoal {
     float* velocity_y;
     int h = 5;
     int w = 1;
-    int minDistance = 15;
-    int viewRange = 50;
+    int minDistance = 20;
+    int viewRange = 80;
 };
 
 struct Grid {
@@ -51,8 +50,8 @@ struct Grid {
     int* gridMapper;
     int gridNumber_Vertical;
     int gridNumber_Horyzontal;
-    int gridWidth = 100;
-    int gridHeight = 100;
+    int gridWidth = 60;
+    int gridHeight = 60;
 };
 
 struct Point {
@@ -66,6 +65,52 @@ GLuint buffer;   //buffer
 Shoal shoal;
 Shoal scatterShoal;
 Grid grid;
+long long int lastTime;
+int nbFrames = 0;
+
+std::string readFileIntoString(const std::string& path);
+void FreeShoalOfFish();
+static unsigned int CompileShader(unsigned int type, const std::string& source);
+static unsigned int CreateShader(const std::string& vertexShader, const std::string& fragmentShader);
+__device__ Point MakePoint(float x, float y);
+__device__ double PowDistance(Point p1, Point p2); // zwraca kwadrat odległości między punktmi
+__device__ float Direction(Point vel); // zwraca kąt reprezentowany przez wektor
+__device__ void FishToCordinates(Point fishPosition, float direction,
+    int h, int w, Point* p1, Point* p2, Point* p3);// przekształca pozycje rybki oraz 
+                                                                       // kierunek na reprezentujący rybę trójkąt
+__device__ int FishsCellId(Point fish, int gridWidth, 
+    int gridHeight, int gridNumber_Horyzontal); // zwraca komórkę w jakiej znajduje się rybka
+__global__ void CategorizeFishToCells(Shoal shoal, Grid grid); // przyporządkowuje rybką komórki
+__global__ void CalculateShoal(Shoal shoal, Grid grid, float* output);// oblicza nowe położenie rybek
+__global__ void InitStartPosition(Shoal shoal, int fisheGrideWidth, int fishGrideHeight); // inicjuje pozycje startową 
+__global__ void ResetGridStartEnd(int* start, int* end, int size);// ustawia wartości tablic jako -1
+__global__ void CalculateStartEnd(int* start, int* end, int* gridId);// oblicza id pierwszej i ostatniej rybki w danej komórce
+__global__ void ResetMapper(int* mapper, int size); // restartuje mapper
+__global__ void MappShoal(Shoal shoal, Shoal tmpShoal, Grid grid, int size);
+__global__ void CopyShoal(Shoal shoal, Shoal tmpShoal, int size);
+void CalculateNeededThreads(int* threads, int* blocks, int neededThreads);// oblicza ilość potrzebnych bloków i ich wielkość
+void LunchCuda(); // uruchamia obliczenia na kernelu
+void InitCuda(); // allokuje pamięć karty
+void display();
+void time(int x);
+void Init();
+void FreeShoalOfFish(); // zwalnia pamięć
+void FrameCounter();
+
+
+int main(int argc, char** argv) {
+    // Initialize GLUT
+    glutInit(&argc, argv);
+    glutInitDisplayMode(GLUT_SINGLE | GLUT_RGB);   //display mode
+    glutInitWindowSize(width, height);
+    glutCreateWindow("ShoalOfFish"); // Create the window
+    Init();
+    // Enter the main loop
+    glutMainLoop();
+    FreeShoalOfFish();
+    return 0;
+}
+
 
 std::string readFileIntoString(const std::string& path) {
     std::ifstream input_file(path);
@@ -78,7 +123,7 @@ std::string readFileIntoString(const std::string& path) {
 }
 
 
-static unsigned int CompileShader(unsigned int type, const std::string &source)
+static unsigned int CompileShader(unsigned int type, const std::string& source)
 {
     unsigned int id = glCreateShader(type);
     const char* src = source.c_str();
@@ -100,7 +145,7 @@ static unsigned int CompileShader(unsigned int type, const std::string &source)
     }
 
     return id;
-    
+
 }
 
 static unsigned int CreateShader(const std::string& vertexShader, const std::string& fragmentShader)
@@ -133,7 +178,7 @@ __device__ double PowDistance(Point p1, Point p2)
 __device__ float Direction(Point vel)
 {
     float direction = asin(vel.y / sqrt(PowDistance(MakePoint(0, 0), vel)));
-    
+
     if (vel.x < 0)
     {
         if (vel.y >= 0)
@@ -216,7 +261,7 @@ __global__ void CalculateShoal(Shoal shoal, Grid grid, float* output)
         grid.gridWidth, grid.gridHeight, grid.gridNumber_Horyzontal);
 
     int horyzontalCells = rightDownCornerCell - leftDownCornerCell;
-    int verticalCells = (leftUpCornerCell - leftDownCornerCell)/grid.gridNumber_Horyzontal ;
+    int verticalCells = (leftUpCornerCell - leftDownCornerCell) / grid.gridNumber_Horyzontal;
 
     for (int x = 0; x <= horyzontalCells; x++)
     {
@@ -266,7 +311,7 @@ __global__ void CalculateShoal(Shoal shoal, Grid grid, float* output)
         }
     }
 
-    
+
     if (neighboursCountCenterOfMass > 0)
     {
         centerOfMass.x /= neighboursCountCenterOfMass;
@@ -275,7 +320,9 @@ __global__ void CalculateShoal(Shoal shoal, Grid grid, float* output)
         newVelocity.x += (centerOfMass.x - fish.x) * CohesionScale;
         newVelocity.y += (centerOfMass.y - fish.y) * CohesionScale;
     }
-    
+
+
+
     separation.x *= SeparationScale;
     separation.y *= SeparationScale;
 
@@ -289,6 +336,7 @@ __global__ void CalculateShoal(Shoal shoal, Grid grid, float* output)
         newVelocity.y += avrVelocity.y * AlignmentScale;
     }
 
+    // zmniejszam szybkość do maksymalnej jeśli jest to niezbędne
     if (PowDistance(MakePoint(0, 0), newVelocity) > MaxSpeed * MaxSpeed)
     {
         double calculateSpeed = sqrt(PowDistance(MakePoint(0, 0), newVelocity));
@@ -296,32 +344,35 @@ __global__ void CalculateShoal(Shoal shoal, Grid grid, float* output)
         newVelocity.y *= MaxSpeed / calculateSpeed;
     }
 
+    // odbicie od ściany
+    if (fish.x + newVelocity.x < 0 || fish.x + newVelocity.x > width)
+    {
+        newVelocity.x = -newVelocity.x;
+    }
 
-    fish.x += newVelocity.x;
-    fish.y += newVelocity.y;
+    if (fish.y + newVelocity.y < 0 || fish.y + newVelocity.y > height)
+    {
+        newVelocity.y = -newVelocity.y;
+    }
 
-
-    // zapisz nowe ustawienie rybki
-    if (fish.x < 0)
-        shoal.position_x[fishId] = width;
-    else if (fish.x > width)
-        shoal.position_x[fishId] = 0;
-    else 
+    // zapisanie wyników
+    if (!(fish.x + newVelocity.x < 0 || fish.x + newVelocity.x > width))
+    {
+        fish.x += newVelocity.x;
+        shoal.velocity_x[fishId] = newVelocity.x;
         shoal.position_x[fishId] = fish.x;
+    }
 
-    if (fish.y < 0)
-        shoal.position_y[fishId] = height;
-    else if (fish.y > height)
-        shoal.position_y[fishId] = 0;
-    else
+
+    if (!(fish.y + newVelocity.y < 0 || fish.y + newVelocity.y > height))
+    {
+        fish.y += newVelocity.y;
+        shoal.velocity_y[fishId] = newVelocity.y;
         shoal.position_y[fishId] = fish.y;
+    }
 
-    shoal.velocity_x[fishId] = newVelocity.x;
-    shoal.velocity_y[fishId] = newVelocity.y;
 
-    
-
-    // zapisuje kordynaty rybki
+    // zapisanie kordynatów rybki
     Point p1, p2, p3;
     FishToCordinates(fish, Direction(newVelocity), shoal.h, shoal.w, &p1, &p2, &p3);
     int start = fishId * 6;
@@ -344,11 +395,11 @@ __global__ void InitStartPosition(Shoal shoal, int fisheGrideWidth, int fishGrid
         return;
 
     int distance = shoal.minDistance;
-    int startPoint_x = (width - distance*fisheGrideWidth) / 2;
-    int startPoimt_y = (height - distance*fishGrideHeight) / 2;
+    int startPoint_x = (width - distance * fisheGrideWidth) / 2;
+    int startPoimt_y = (height - distance * fishGrideHeight) / 2;
     int fishGridY = x / fisheGrideWidth;
     int fishGridX = x - fishGridY * fisheGrideWidth;
-    shoal.velocity_x[x] = MaxSpeed * cos(x * 2* M_PI / fishNumber);
+    shoal.velocity_x[x] = MaxSpeed * cos(x * 2 * M_PI / fishNumber);
     shoal.velocity_y[x] = MaxSpeed * sin(x * 2 * M_PI / fishNumber);
     shoal.position_x[x] = startPoint_x + fishGridX * distance;
     shoal.position_y[x] = startPoimt_y + fishGridY * distance;
@@ -472,6 +523,7 @@ void LunchCuda()
     gpuErrchk(cudaPeekAtLastError());
     gpuErrchk(cudaDeviceSynchronize());
 }
+
 // Display callback function
 void display() {
     cudaGLMapBufferObject((void**)&device, buffer);   //maps the buffer object into the address space of CUDA
@@ -481,9 +533,9 @@ void display() {
 
     cudaGLUnmapBufferObject(buffer);
     glBindBuffer(GL_ARRAY_BUFFER, buffer);
-    glDrawArrays(GL_TRIANGLES, 0, 3*fishNumber);
+    glDrawArrays(GL_TRIANGLES, 0, 3 * fishNumber);
     glutSwapBuffers();
-    
+
 }
 
 void InitCuda()
@@ -505,7 +557,7 @@ void InitCuda()
     gpuErrchk(cudaMalloc(&grid.lastFishInCell, grid.gridHeight * grid.gridWidth * sizeof(int)));
     grid.gridNumber_Horyzontal = (int)ceil((double)width / (double)grid.gridWidth);
     grid.gridNumber_Vertical = (int)ceil((double)height / (double)grid.gridHeight);
-    
+
 
     int rantagleOfFishWidth = (int)ceil(sqrt((fishNumber * width) / height));
     int rantagleOfFishHeight = (int)ceil(rantagleOfFishWidth * height / width);
@@ -521,6 +573,7 @@ void time(int x)
 {
     if (glutGetWindow())
     {
+        FrameCounter();
         glutPostRedisplay();
         glutTimerFunc(Timer, time, 0);
     }
@@ -528,12 +581,14 @@ void time(int x)
 
 void Init()
 {
+    
     glClearColor(0.0, 0.0, 0.0, 0.0);
     glMatrixMode(GL_PROJECTION);
     gluOrtho2D(0.0, width, 0.0, height);
     glutDisplayFunc(display);
     time(0);
     glewInit();
+    lastTime = glutGet(GLUT_ELAPSED_TIME);
     glGenBuffers(1, &buffer);
     glBindBuffer(GL_ARRAY_BUFFER, buffer);
     unsigned int size = fishNumber * 6 * sizeof(float); // ilość wektorów
@@ -570,15 +625,15 @@ void FreeShoalOfFish()
     cudaFree(scatterShoal.velocity_y);
 }
 
-int main(int argc, char** argv) {
-    // Initialize GLUT
-    glutInit(&argc, argv);
-    glutInitDisplayMode(GLUT_SINGLE | GLUT_RGB);   //display mode
-    glutInitWindowSize(width, height);
-    glutCreateWindow("ShoalOfFish"); // Create the window
-    Init();
-    // Enter the main loop
-    glutMainLoop();
-    FreeShoalOfFish();
-    return 0;
+void FrameCounter()
+{
+    long long int  currentTime = glutGet(GLUT_ELAPSED_TIME);
+    nbFrames++;
+    if ((currentTime - lastTime)/1000 >= 1) { 
+        char buffor[100];
+        sprintf(buffor, "FPS: %d", nbFrames);
+        glutSetWindowTitle(buffor);
+        nbFrames = 0;
+        lastTime = glutGet(GLUT_ELAPSED_TIME);
+    }
 }
