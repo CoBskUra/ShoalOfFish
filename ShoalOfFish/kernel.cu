@@ -13,10 +13,20 @@
 #define width 1280   //screen width
 #define height 700   //screen height
 #define fishNumber 10000
-#define maxThreds 1024
+#define maxThreds 512
 #define maxBlocks 100
 #define M_PI 3.14159265358979323846
 #define MaxSpeed 10
+#define Timer 10
+#define gpuErrchk(ans) { gpuAssert((ans), __FILE__, __LINE__); }
+inline void gpuAssert(cudaError_t code, const char* file, int line, bool abort = true)
+{
+    if (code != cudaSuccess)
+    {
+        fprintf(stderr, "GPUassert: %s %s %d\n", cudaGetErrorString(code), file, line);
+        if (abort) exit(code);
+    }
+}
 constexpr float CohesionScale = 0.01f;
 constexpr float AlignmentScale = 0.1f;
 constexpr float SeparationScale = 0.1f;
@@ -27,10 +37,10 @@ struct Shoal {
     float* position_y;
     float* velocity_x;
     float* velocity_y;
-    int h = 12;
-    int w = 3;
+    int h = 5;
+    int w = 1;
     int minDistance = 15;
-    int viewRange = 80;
+    int viewRange = 50;
 };
 
 struct Grid {
@@ -50,14 +60,11 @@ struct Point {
 };
 
 
-float t = 0.0f;
 float* device;   //pointer to memory on the device (GPU VRAM)
 GLuint buffer;   //buffer
 Shoal shoal;
 Shoal scatterShoal;
 Grid grid;
-float background;
-float fishColor;
 
 static unsigned int CompileShader(unsigned int type, const std::string &source)
 {
@@ -166,59 +173,13 @@ __global__ void CategorizeFishToCells(Shoal shoal, Grid grid)
     Point fish = MakePoint(shoal.position_x[fishId], shoal.position_y[fishId]);
 
     grid.cellsId[fishId] = FishsCellId(fish, grid.gridWidth, grid.gridHeight, grid.gridNumber_Horyzontal);
-
-    //printf("\nfish %d, cell %d", fishId, grid.cellsId[fishId]);
 }
 
 
-//__global__ void PrintfShoalGrid(Shoal shoal, Grid grid)
-//{
-//    unsigned int fishId = blockIdx.x * blockDim.x + threadIdx.x;
-//    if (fishId > 0)
-//        return;
-//    printf("\nfishId");
-//    for (int i = 0; i < fishNumber; i++)
-//    {
-//        printf(",%d", i);
-//    }
-//
-//    printf("\n position ");
-//
-//    for (int i = 0; i < fishNumber; i++)
-//    {
-//        printf(",( %f %f) ", shoal.position_x[i], shoal.position_y[i]);
-//    }
-//
-//    printf("\nvel");
-//    for (int i = 0; i < fishNumber; i++)
-//    {
-//        printf(",( %f %f) ", shoal.velocity_x[i], shoal.velocity_y[i]);
-//    }
-//    
-//    printf("\ngrid");
-//    for (int i = 0; i < fishNumber; i++)
-//    {
-//        printf(",%d ", grid.cellsId[i]);
-//    }
-//
-//    printf("\nmaper");
-//    for (int i = 0; i < fishNumber; i++)
-//    {
-//        printf(",%d ", grid.gridMapper[i]);
-//    }
-//
-//    printf("\nStartEnd");
-//    for (int i = 0; i < grid.gridNumber_Horyzontal*grid.gridNumber_Vertical; i++)
-//    {
-//        printf("cellId: %d (%d - %d ) ", i, grid.firstFishInCell[i], grid.lastFishInCell[i]);
-//    }
-//    //printf("\nfish %d, cell %d", fishId, grid.cellsId[fishId]);
-//}
 
 
 __global__ void CalculateShoal(Shoal shoal, Grid grid, float* output)
 {
-    //printf("CalculateShoal");
     unsigned int fishId = blockIdx.x * blockDim.x + threadIdx.x;
     if (fishId >= fishNumber)
         return;
@@ -245,26 +206,17 @@ __global__ void CalculateShoal(Shoal shoal, Grid grid, float* output)
     int horyzontalCells = rightDownCornerCell - leftDownCornerCell;
     int verticalCells = (leftUpCornerCell - leftDownCornerCell)/grid.gridNumber_Horyzontal ;
 
-    /*leftDownCornerCell = 0;
-    horyzontalCells = grid.gridWidth;
-    verticalCells = grid.gridHeight;*/
     for (int x = 0; x <= horyzontalCells; x++)
     {
-        if (x < 0) { continue; }
         for (int y = 0; y <= verticalCells; y++)
         {
-            if (y < 0) { continue; }
-            //int cellId = FishsCellId(MakePoint(x, y), grid.gridWidth, grid.gridHeight, grid.gridNumber_Horyzontal);
             int cellId = y * grid.gridNumber_Horyzontal + leftDownCornerCell + x;
-            /*if (fishId == 0)
-                printf("\n %d, %d %d", x, y, cellId);*/
             if (cellId > grid.gridNumber_Horyzontal * grid.gridNumber_Vertical - 1)
             {
                 continue;
             }
             int start = grid.firstFishInCell[cellId];
             int end = grid.lastFishInCell[cellId];
-            //printf("\nfish %d cell %d, start %d, end %d ", fishId, cellId, start, end);
             if (start == -1)
                 continue;
 
@@ -332,7 +284,6 @@ __global__ void CalculateShoal(Shoal shoal, Grid grid, float* output)
         newVelocity.y *= MaxSpeed / calculateSpeed;
     }
 
-    //printf("\n prev location %f %f new %f %f", fish.x, fish.y, fish.x + newVelocity.x, fish.y + newVelocity.y);
 
     fish.x += newVelocity.x;
     fish.y += newVelocity.y;
@@ -402,7 +353,6 @@ __global__ void ResetGridStartEnd(int* start, int* end, int size)
 
 __global__ void CalculateStartEnd(int* start, int* end, int* gridId)
 {
-    //printf("CalculateStartEnd");
     unsigned int x = blockIdx.x * blockDim.x + threadIdx.x;
     if (x >= fishNumber)
         return;
@@ -415,20 +365,11 @@ __global__ void CalculateStartEnd(int* start, int* end, int* gridId)
     if (x == fishNumber - 1 || gridId[x + 1] != curentGridId)
         end[curentGridId] = x;
 
-    //printf("\nfish %d cell %d, start %d, end %d ", x, curentGridId, start[curentGridId], end[curentGridId]);
 }
 
 
 
-void time(int x)
-{
-    if (glutGetWindow())
-    {
-        glutPostRedisplay();
-        glutTimerFunc(10, time, 0);
-        t += 0.0166f;
-    }
-}
+
 
 void CalculateNeededThreads(int* threads, int* blocks, int neededThreads)
 {
@@ -481,73 +422,46 @@ __global__ void CopyShoal(Shoal shoal, Shoal tmpShoal, int size)
     shoal.position_y[x] = tmpShoal.position_y[x];
 }
 
-void swap(float** a, float** b) {
-    float* temp =* a;
-    *a = *b;
-    *b = temp;
-}
 
-// czemu nie działa
-void swapShoalsPointers(Shoal shoal, Shoal tmpShoal)
-{
-    swap(&shoal.velocity_x, &tmpShoal.velocity_x);
-    swap(&shoal.velocity_y, &tmpShoal.velocity_y);
-    swap(&shoal.position_x, &tmpShoal.position_x);
-    swap(&shoal.position_y, &tmpShoal.position_y);
-}
 
 void LunchCuda()
 {
     int blocks, threads;
     CalculateNeededThreads(&threads, &blocks, fishNumber);
     CategorizeFishToCells << <blocks, threads >> > (shoal, grid);
-    cudaDeviceSynchronize();
+    gpuErrchk(cudaPeekAtLastError());
+    gpuErrchk(cudaDeviceSynchronize());
 
     CalculateNeededThreads(&threads, &blocks, grid.gridNumber_Horyzontal * grid.gridNumber_Vertical);
     ResetGridStartEnd << <blocks, threads >> > (grid.firstFishInCell, grid.lastFishInCell, grid.gridWidth * grid.gridHeight - 1);
     CalculateNeededThreads(&threads, &blocks, fishNumber);
     ResetMapper << <blocks, threads >> > (grid.gridMapper, fishNumber);
-    cudaDeviceSynchronize();
-    /*
-    PrintfShoalGrid << <blocks, threads >> > (shoal, grid);
-    cudaDeviceSynchronize();*/
+    gpuErrchk(cudaPeekAtLastError());
+    gpuErrchk(cudaDeviceSynchronize());
 
     thrust::sort_by_key(thrust::device, grid.cellsId, grid.cellsId + fishNumber, grid.gridMapper);
 
     CalculateNeededThreads(&threads, &blocks, fishNumber);
     MappShoal << <blocks, threads >> > (shoal, scatterShoal, grid, fishNumber);
-    cudaDeviceSynchronize();
-    //swapShoalsPointers(shoal, scatterShoal);
+    gpuErrchk(cudaPeekAtLastError());
+    gpuErrchk(cudaDeviceSynchronize());
     CopyShoal << <blocks, threads >> > (shoal, scatterShoal, fishNumber);
-    cudaDeviceSynchronize();
-
-    /*std::swap(shoal.position_x, scatterShoal.position_x);
-    std::swap(shoal.position_y, scatterShoal.position_y);
-    std::swap(shoal.velocity_x, scatterShoal.velocity_x);
-    std::swap(shoal.velocity_y, scatterShoal.velocity_y);*/
-    /*thrust::sort_by_key(thrust::device, grid.cellsId, grid.cellsId + fishNumber, shoal.position_x);
-    thrust::sort_by_key(thrust::device, grid.cellsId, grid.cellsId + fishNumber , shoal.position_y);
-    thrust::sort_by_key(thrust::device, grid.cellsId, grid.cellsId + fishNumber, shoal.velocity_x);
-    thrust::sort_by_key(thrust::device, grid.cellsId, grid.cellsId + fishNumber, shoal.velocity_y);*/
-    
-
-    
+    gpuErrchk(cudaPeekAtLastError());
+    gpuErrchk(cudaDeviceSynchronize());
 
 
     CalculateNeededThreads(&threads, &blocks, fishNumber);
     CalculateStartEnd << <blocks, threads >> > (grid.firstFishInCell, grid.lastFishInCell, grid.cellsId);
-    cudaDeviceSynchronize();
-
-    //PrintfShoalGrid << <blocks, threads >> > (shoal, grid);
-    //cudaDeviceSynchronize();
+    gpuErrchk(cudaPeekAtLastError());
+    gpuErrchk(cudaDeviceSynchronize());
 
     CalculateNeededThreads(&threads, &blocks, fishNumber);
     CalculateShoal << <blocks, threads >> > (shoal, grid, device);
-    cudaDeviceSynchronize();
+    gpuErrchk(cudaPeekAtLastError());
+    gpuErrchk(cudaDeviceSynchronize());
 }
 // Display callback function
 void display() {
-    // Clear the window
     cudaGLMapBufferObject((void**)&device, buffer);   //maps the buffer object into the address space of CUDA
     glClear(GL_COLOR_BUFFER_BIT);
 
@@ -562,21 +476,21 @@ void display() {
 
 void InitCuda()
 {
-    cudaMalloc(&device, fishNumber * 6 * sizeof(float));   //allocate memory on the GPU VRAM
-    cudaMalloc(&shoal.position_x, fishNumber * sizeof(float));
-    cudaMalloc(&shoal.position_y, fishNumber * sizeof(float));
-    cudaMalloc(&shoal.velocity_x, fishNumber * sizeof(float));
-    cudaMalloc(&shoal.velocity_y, fishNumber * sizeof(float));
+    gpuErrchk(cudaMalloc(&device, fishNumber * 6 * sizeof(float)));
+    gpuErrchk(cudaMalloc(&shoal.position_x, fishNumber * sizeof(float)));
+    gpuErrchk(cudaMalloc(&shoal.position_y, fishNumber * sizeof(float)));
+    gpuErrchk(cudaMalloc(&shoal.velocity_x, fishNumber * sizeof(float)));
+    gpuErrchk(cudaMalloc(&shoal.velocity_y, fishNumber * sizeof(float)));
 
-    cudaMalloc(&scatterShoal.position_x, fishNumber * sizeof(float));
-    cudaMalloc(&scatterShoal.position_y, fishNumber * sizeof(float));
-    cudaMalloc(&scatterShoal.velocity_x, fishNumber * sizeof(float));
-    cudaMalloc(&scatterShoal.velocity_y, fishNumber * sizeof(float));
+    gpuErrchk(cudaMalloc(&scatterShoal.position_x, fishNumber * sizeof(float)));
+    gpuErrchk(cudaMalloc(&scatterShoal.position_y, fishNumber * sizeof(float)));
+    gpuErrchk(cudaMalloc(&scatterShoal.velocity_x, fishNumber * sizeof(float)));
+    gpuErrchk(cudaMalloc(&scatterShoal.velocity_y, fishNumber * sizeof(float)));
 
-    cudaMalloc(&grid.cellsId, fishNumber * sizeof(int));
-    cudaMalloc(&grid.gridMapper, fishNumber * sizeof(int));
-    cudaMalloc(&grid.firstFishInCell, grid.gridHeight * grid.gridWidth * sizeof(int));
-    cudaMalloc(&grid.lastFishInCell, grid.gridHeight * grid.gridWidth * sizeof(int));
+    gpuErrchk(cudaMalloc(&grid.cellsId, fishNumber * sizeof(int)));
+    gpuErrchk(cudaMalloc(&grid.gridMapper, fishNumber * sizeof(int)));
+    gpuErrchk(cudaMalloc(&grid.firstFishInCell, grid.gridHeight * grid.gridWidth * sizeof(int)));
+    gpuErrchk(cudaMalloc(&grid.lastFishInCell, grid.gridHeight * grid.gridWidth * sizeof(int)));
     grid.gridNumber_Horyzontal = (int)ceil((double)width / (double)grid.gridWidth);
     grid.gridNumber_Vertical = (int)ceil((double)height / (double)grid.gridHeight);
     
@@ -587,7 +501,17 @@ void InitCuda()
     int blocks, threads;
     CalculateNeededThreads(&threads, &blocks, fishNumber);
     InitStartPosition << <blocks, threads >> > (shoal, rantagleOfFishWidth, rantagleOfFishHeight);
-    cudaDeviceSynchronize();
+    gpuErrchk(cudaPeekAtLastError());
+    gpuErrchk(cudaDeviceSynchronize());
+}
+
+void time(int x)
+{
+    if (glutGetWindow())
+    {
+        glutPostRedisplay();
+        glutTimerFunc(Timer, time, 0);
+    }
 }
 
 void Init()
@@ -596,7 +520,6 @@ void Init()
     glMatrixMode(GL_PROJECTION);
     gluOrtho2D(0.0, width, 0.0, height);
     glutDisplayFunc(display);
-    //glutReshapeFunc(Reshape);
     time(0);
     glewInit();
     glGenBuffers(1, &buffer);
