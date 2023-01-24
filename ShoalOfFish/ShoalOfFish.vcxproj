@@ -67,7 +67,9 @@
     </CudaCompile>
     <PostBuildEvent>
       <Command>copy "$(SolutionDir)Dependencies\freeglut\bin\$(Platform)\freeglut.dll" "$(OutDir)"
-copy "$(SolutionDir)Dependencies\glew-2.2.0\bin\Release\$(Platform)\glew32.dll" "$(OutDir)"</Command>
+copy "$(SolutionDir)Dependencies\glew-2.2.0\bin\Release\$(Platform)\glew32.dll" "$(OutDir)"
+copy "$(SolutionDir)ShoalOfFish\fragmentShader.glsl" "$(OutDir)"
+copy "$(SolutionDir)ShoalOfFish\vertexShader.glsl" "$(OutDir)"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -93,9 +95,15 @@ copy "$(SolutionDir)Dependencies\glew-2.2.0\bin\Release\$(Platform)\glew32.dll" 
     </CudaCompile>
     <PostBuildEvent>
       <Command>copy "$(SolutionDir)Dependencies\freeglut\bin\$(Platform)\freeglut.dll" "$(OutDir)"
-copy "$(SolutionDir)Dependencies\glew-2.2.0\bin\Release\$(Platform)\glew32.dll" "$(OutDir)"</Command>
+copy "$(SolutionDir)Dependencies\glew-2.2.0\bin\Release\$(Platform)\glew32.dll" "$(OutDir)"
+copy "$(SolutionDir)ShoalOfFish\fragmentShader.glsl" "$(OutDir)"
+copy "$(SolutionDir)ShoalOfFish\vertexShader.glsl" "$(OutDir)"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
+  <ItemGroup>
+    <None Include="fragmentShader.glsl" />
+    <None Include="vertexShader.glsl" />
+  </ItemGroup>
   <ItemGroup>
     <CudaCompile Include="kernel.cu" />
   </ItemGroup>

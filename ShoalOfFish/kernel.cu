@@ -10,6 +10,7 @@
 #include <iostream>
 #include <thrust/sort.h>
 #include <thrust/execution_policy.h>
+#include <fstream>
 #define width 1280   //screen width
 #define height 700   //screen height
 #define fishNumber 10000
@@ -65,6 +66,17 @@ GLuint buffer;   //buffer
 Shoal shoal;
 Shoal scatterShoal;
 Grid grid;
+
+std::string readFileIntoString(const std::string& path) {
+    std::ifstream input_file(path);
+    if (!input_file.is_open()) {
+        std::cerr << "Could not open the file - '"
+            << path << "'" << std::endl;
+        exit(EXIT_FAILURE);
+    }
+    return std::string((std::istreambuf_iterator<char>(input_file)), std::istreambuf_iterator<char>());
+}
+
 
 static unsigned int CompileShader(unsigned int type, const std::string &source)
 {
@@ -529,23 +541,8 @@ void Init()
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(float) * 2, 0);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
-    std::string vertexShader =
-        "#version 330 core\n"
-        "layout(location = e) in vec4 position; \n"
-        "\n"
-        "void main()\n"
-        "{\n"
-        "gl_Position = position; \n"
-        "}\n";
-    std::string fragmentShader =
-        "#version 330 core\n"
-        "\n"
-        "layout(location = 0) out vec4 color; \n"
-        "\n"
-        "void main()\n"
-        "{\n"
-        " color = vec4(0.1, 1.0, 0.1, 1.0); \n"
-        "}\n";
+    std::string vertexShader = readFileIntoString("vertexShader.glsl");
+    std::string fragmentShader = readFileIntoString("fragmentShader.glsl");
 
     unsigned int shader = CreateShader(vertexShader, fragmentShader);
     glUseProgram(shader);
